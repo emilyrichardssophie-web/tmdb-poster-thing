@@ -46,9 +46,8 @@ async function getImages(type, id) {
 
   const res = await axios.get(endpoint, {
     params: {
-      api_key: config.tmdbApiKey,
-      include_image_language: `${config.defaultLanguage},null,*`,
-      language: null // 🔥 critical fix for foreign posters
+      api_key: config.tmdbApiKey
+      // 🚫 NO include_image_language
     }
   });
 
@@ -86,7 +85,7 @@ function filterByLanguage(images) {
   }
 
   if (!filtered.length) {
-    // fallback to ANY language (fixes foreign content)
+    // fallback to ANY language
     filtered = images;
   }
 
@@ -96,25 +95,25 @@ function filterByLanguage(images) {
 // --- SAFE VOTE FILTER ---
 function applyVoteFilter(images) {
   const viable = images.filter(p => p.vote_count >= 2);
-
-  // fallback if nothing passes
   return viable.length ? viable : images;
 }
 
-// --- TEXTLESS FILTER (for backgrounds) ---
-function filterTextless(images) {
-  const noText = images.filter(img => img.iso_639_1 === null);
-  return noText.length ? noText : images;
-}
-
 // --- PICK IMAGE ---
-function pickImage(images) {
+function pickImage(images, isBackdrop = false) {
   if (!images.length) return null;
 
-  // 1. language priority
+  // 🎬 BACKDROP: prefer textless first
+  if (isBackdrop) {
+    const textless = images.filter(p => p.iso_639_1 === null);
+    if (textless.length) {
+      images = textless;
+    }
+  }
+
+  // 1. language
   let filtered = filterByLanguage(images);
 
-  // 2. vote filtering (safe)
+  // 2. votes
   filtered = applyVoteFilter(filtered);
 
   // 3. sort
@@ -168,7 +167,7 @@ app.get("/poster/tmdb:raw", async (req, res) => {
   }
 });
 
-// BACKGROUND (textless preferred)
+// BACKGROUND
 app.get("/background/tmdb:raw", async (req, res) => {
   try {
     const raw = req.params.raw.replace(/^:/, "");
@@ -185,10 +184,7 @@ app.get("/background/tmdb:raw", async (req, res) => {
       return res.status(404).send("No backdrops found");
     }
 
-    // 🔥 prefer textless first
-    const textlessFirst = filterTextless(backdrops);
-
-    const image = pickImage(textlessFirst);
+    const image = pickImage(backdrops, true);
     if (!image) return res.status(404).send("No suitable backdrop");
 
     return res.redirect(`${IMAGE_BASE}${image.file_path}`);
