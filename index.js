@@ -67,55 +67,60 @@ async function getPosters(type, id) {
 // --- SORTING LOGIC ---
 function sortPosters(posters) {
   return posters.sort((a, b) => {
-    // 1. More votes = more "official"
     if (b.vote_count !== a.vote_count) {
       return b.vote_count - a.vote_count;
     }
 
-    // 2. Higher rating
     if (b.vote_average !== a.vote_average) {
       return b.vote_average - a.vote_average;
     }
 
-    // 3. Higher resolution
     return b.width - a.width;
   });
 }
 
-// --- PICK POSTER ---
+// --- PICK POSTER (FIXED) ---
 function pickPoster(posters) {
   if (!posters.length) return null;
 
-  // 1. Exact language
+  // 1. Language priority
   let filtered = posters.filter(
     p => p.iso_639_1 === config.defaultLanguage
   );
 
-  // 2. Fallback to "no language"
   if (!filtered.length) {
     filtered = posters.filter(p => p.iso_639_1 === null);
   }
 
-  // 3. Fallback to ANY language
   if (!filtered.length && config.fallbackToAnyLanguage) {
     filtered = posters;
   }
 
   if (!filtered.length) return null;
 
-  const sorted = sortPosters(filtered);
+  // 🔥 2. QUALITY FILTER (NEW)
+  const MIN_VOTES = 5;
+
+  let quality = filtered.filter(p => p.vote_count >= MIN_VOTES);
+
+  if (!quality.length) {
+    quality = filtered; // fallback if everything is low quality
+  }
+
+  const sorted = sortPosters(quality);
 
   // ORIGINAL
   if (config.variant !== "alternative") {
     return sorted[0];
   }
 
-  // ALTERNATIVE (avoid near-duplicates)
+  // 🔥 3. BETTER ALTERNATIVE
   const original = sorted[0];
 
   const alternative = sorted.find(p =>
     p.file_path !== original.file_path &&
-    Math.abs(p.width - original.width) > 50
+    p.vote_count >= MIN_VOTES &&
+    Math.abs(p.vote_average - original.vote_average) < 2
   );
 
   return alternative || sorted[1] || sorted[0];
