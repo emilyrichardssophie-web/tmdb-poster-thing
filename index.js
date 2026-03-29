@@ -9,16 +9,31 @@ const PORT = process.env.PORT || 3000;
 const TMDB_BASE = "https://api.themoviedb.org/3";
 const IMAGE_BASE = `https://image.tmdb.org/t/p/${config.imageSize}`;
 
-// Simple memory cache
+// Cache
 const cache = new Map();
-const CACHE_TTL = 1000 * 60 * 60; // 1 hour
+const CACHE_TTL = 1000 * 60 * 60;
 
-function getCacheKey(type, id) {
-  return `${type}:${id}`;
+// --- TYPE NORMALIZATION ---
+function normalizeType(type) {
+  if (!type) return null;
+
+  const t = type.toLowerCase();
+
+  if (t === "movie" || t === "movies") return "movie";
+  if (["tv", "series", "show", "tvshow"].includes(t)) return "tv";
+
+  return null;
 }
 
+// --- FETCH ---
 async function getPosters(type, id) {
-  const cacheKey = getCacheKey(type, id);
+  const normalizedType = normalizeType(type);
+
+  if (!normalizedType) {
+    throw new Error(`Invalid type: ${type}`);
+  }
+
+  const cacheKey = `${normalizedType}:${id}`;
 
   if (cache.has(cacheKey)) {
     const cached = cache.get(cacheKey);
@@ -27,14 +42,10 @@ async function getPosters(type, id) {
     }
   }
 
-  let endpoint;
-  if (type === "movie") {
-    endpoint = `${TMDB_BASE}/movie/${id}/images`;
-  } else if (type === "tv") {
-    endpoint = `${TMDB_BASE}/tv/${id}/images`;
-  } else {
-    throw new Error("Invalid type");
-  }
+  const endpoint =
+    normalizedType === "movie"
+      ? `${TMDB_BASE}/movie/${id}/images`
+      : `${TMDB_BASE}/tv/${id}/images`;
 
   const res = await axios.get(endpoint, {
     params: {
@@ -53,32 +64,50 @@ async function getPosters(type, id) {
   return posters;
 }
 
+// --- BETTER SORTING ---
+function sortPosters(posters) {
+  return posters.sort((a, b) => {
+    // 1. Higher vote_count first (most important)
+    if (b.vote_count !== a.vote_count) {
+      return b.vote_count - a.vote_count;
+    }
+
+    // 2. Higher vote_average
+    if (b.vote_average !== a.vote_average) {
+      return b.vote_average - a.vote_average;
+    }
+
+    // 3. Higher resolution
+    return b.width - a.width;
+  });
+}
+
+// --- PICK LOGIC ---
 function pickPoster(posters) {
+  // Step 1: filter by language
   let filtered = posters.filter(
     p => p.iso_639_1 === config.defaultLanguage
   );
 
+  // fallback
   if (!filtered.length && config.fallbackToAnyLanguage) {
     filtered = posters;
   }
 
   if (!filtered.length) return null;
 
-  // Rank by quality
-  filtered.sort((a, b) => {
-    const scoreA = a.vote_average * a.vote_count;
-    const scoreB = b.vote_average * b.vote_count;
-    return scoreB - scoreA;
-  });
+  // Step 2: sort properly
+  const sorted = sortPosters(filtered);
 
+  // Step 3: pick variant
   if (config.variant === "alternative") {
-    return filtered[1] || filtered[0];
+    return sorted[1] || sorted[0];
   }
 
-  return filtered[0];
+  return sorted[0];
 }
 
-// Route: /tmdb:movie:550
+// --- ROUTE ---
 app.get("/tmdb:raw", async (req, res) => {
   try {
     const raw = req.params.raw.replace(/^:/, "");
