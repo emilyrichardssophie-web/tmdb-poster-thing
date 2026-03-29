@@ -47,7 +47,7 @@ async function getImages(type, id) {
   const res = await axios.get(endpoint, {
     params: {
       api_key: config.tmdbApiKey,
-      include_image_language: `${config.defaultLanguage},null`
+      include_image_language: `${config.defaultLanguage},null,*`
     }
   });
 
