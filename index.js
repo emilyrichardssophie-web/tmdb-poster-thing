@@ -25,13 +25,10 @@ function normalizeType(type) {
   return null;
 }
 
-// --- FETCH POSTERS ---
-async function getPosters(type, id) {
+// --- FETCH IMAGES ---
+async function getImages(type, id) {
   const normalizedType = normalizeType(type);
-
-  if (!normalizedType) {
-    throw new Error(`Invalid type: ${type}`);
-  }
+  if (!normalizedType) throw new Error(`Invalid type: ${type}`);
 
   const cacheKey = `${normalizedType}:${id}`;
 
@@ -54,19 +51,17 @@ async function getPosters(type, id) {
     }
   });
 
-  const posters = res.data.posters || [];
-
   cache.set(cacheKey, {
-    data: posters,
+    data: res.data,
     time: Date.now()
   });
 
-  return posters;
+  return res.data;
 }
 
-// --- SORTING LOGIC ---
-function sortPosters(posters) {
-  return posters.sort((a, b) => {
+// --- SORT ---
+function sortImages(images) {
+  return images.sort((a, b) => {
     if (b.vote_count !== a.vote_count) {
       return b.vote_count - a.vote_count;
     }
@@ -79,55 +74,67 @@ function sortPosters(posters) {
   });
 }
 
-// --- PICK POSTER (FIXED) ---
-function pickPoster(posters) {
-  if (!posters.length) return null;
-
-  // 1. Language priority
-  let filtered = posters.filter(
+// --- LANGUAGE FILTER ---
+function filterByLanguage(images) {
+  let filtered = images.filter(
     p => p.iso_639_1 === config.defaultLanguage
   );
 
   if (!filtered.length) {
-    filtered = posters.filter(p => p.iso_639_1 === null);
+    filtered = images.filter(p => p.iso_639_1 === null);
   }
 
-  if (!filtered.length && config.fallbackToAnyLanguage) {
-    filtered = posters;
+  if (!filtered.length) {
+    // 👈 THIS FIXES FOREIGN CONTENT
+    filtered = images;
   }
 
-  if (!filtered.length) return null;
+  return filtered;
+}
 
-  // 🔥 2. QUALITY FILTER (NEW)
-  const MIN_VOTES = 5;
+// --- SAFE VOTE FILTER ---
+function applyVoteFilter(images) {
+  const viable = images.filter(p => p.vote_count >= 2);
 
-  let quality = filtered.filter(p => p.vote_count >= MIN_VOTES);
+  // 👈 fallback if nothing passes
+  return viable.length ? viable : images;
+}
 
-  if (!quality.length) {
-    quality = filtered; // fallback if everything is low quality
-  }
+// --- PICK IMAGE ---
+function pickImage(images) {
+  if (!images.length) return null;
 
-  const sorted = sortPosters(quality);
+  // 1. language
+  let filtered = filterByLanguage(images);
+
+  // 2. votes (safe)
+  filtered = applyVoteFilter(filtered);
+
+  // 3. sort
+  const sorted = sortImages(filtered);
+
+  if (!sorted.length) return null;
 
   // ORIGINAL
   if (config.variant !== "alternative") {
     return sorted[0];
   }
 
-  // 🔥 3. BETTER ALTERNATIVE
+  // ALTERNATIVE
   const original = sorted[0];
 
-  const alternative = sorted.find(p =>
+  const alternatives = sorted.slice(1).filter(p =>
     p.file_path !== original.file_path &&
-    p.vote_count >= MIN_VOTES &&
-    Math.abs(p.vote_average - original.vote_average) < 2
+    p.vote_count >= Math.max(2, original.vote_count * 0.3)
   );
 
-  return alternative || sorted[1] || sorted[0];
+  return alternatives[0] || sorted[1] || sorted[0];
 }
 
-// --- ROUTE ---
-app.get("/tmdb:raw", async (req, res) => {
+// --- ROUTES ---
+
+// POSTER
+app.get("/poster/tmdb:raw", async (req, res) => {
   try {
     const raw = req.params.raw.replace(/^:/, "");
     const [type, id] = raw.split(":");
@@ -136,21 +143,45 @@ app.get("/tmdb:raw", async (req, res) => {
       return res.status(400).send("Invalid format");
     }
 
-    const posters = await getPosters(type, id);
+    const data = await getImages(type, id);
+    const posters = data.posters || [];
 
     if (!posters.length) {
       return res.status(404).send("No posters found");
     }
 
-    const poster = pickPoster(posters);
+    const image = pickImage(posters);
+    if (!image) return res.status(404).send("No suitable poster");
 
-    if (!poster) {
-      return res.status(404).send("No suitable poster");
+    return res.redirect(`${IMAGE_BASE}${image.file_path}`);
+
+  } catch (err) {
+    console.error(err);
+    return res.status(500).send("Server error");
+  }
+});
+
+// BACKGROUND (NEW)
+app.get("/background/tmdb:raw", async (req, res) => {
+  try {
+    const raw = req.params.raw.replace(/^:/, "");
+    const [type, id] = raw.split(":");
+
+    if (!type || !id) {
+      return res.status(400).send("Invalid format");
     }
 
-    const imageUrl = `${IMAGE_BASE}${poster.file_path}`;
+    const data = await getImages(type, id);
+    const backdrops = data.backdrops || [];
 
-    return res.redirect(imageUrl);
+    if (!backdrops.length) {
+      return res.status(404).send("No backdrops found");
+    }
+
+    const image = pickImage(backdrops);
+    if (!image) return res.status(404).send("No suitable backdrop");
+
+    return res.redirect(`${IMAGE_BASE}${image.file_path}`);
 
   } catch (err) {
     console.error(err);
