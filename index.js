@@ -47,7 +47,8 @@ async function getImages(type, id) {
   const res = await axios.get(endpoint, {
     params: {
       api_key: config.tmdbApiKey,
-      include_image_language: `${config.defaultLanguage},null,*`
+      include_image_language: `${config.defaultLanguage},null,*`,
+      language: null // 🔥 critical fix for foreign posters
     }
   });
 
@@ -85,7 +86,7 @@ function filterByLanguage(images) {
   }
 
   if (!filtered.length) {
-    // 👈 THIS FIXES FOREIGN CONTENT
+    // fallback to ANY language (fixes foreign content)
     filtered = images;
   }
 
@@ -96,18 +97,24 @@ function filterByLanguage(images) {
 function applyVoteFilter(images) {
   const viable = images.filter(p => p.vote_count >= 2);
 
-  // 👈 fallback if nothing passes
+  // fallback if nothing passes
   return viable.length ? viable : images;
+}
+
+// --- TEXTLESS FILTER (for backgrounds) ---
+function filterTextless(images) {
+  const noText = images.filter(img => img.iso_639_1 === null);
+  return noText.length ? noText : images;
 }
 
 // --- PICK IMAGE ---
 function pickImage(images) {
   if (!images.length) return null;
 
-  // 1. language
+  // 1. language priority
   let filtered = filterByLanguage(images);
 
-  // 2. votes (safe)
+  // 2. vote filtering (safe)
   filtered = applyVoteFilter(filtered);
 
   // 3. sort
@@ -161,7 +168,7 @@ app.get("/poster/tmdb:raw", async (req, res) => {
   }
 });
 
-// BACKGROUND (NEW)
+// BACKGROUND (textless preferred)
 app.get("/background/tmdb:raw", async (req, res) => {
   try {
     const raw = req.params.raw.replace(/^:/, "");
@@ -178,7 +185,10 @@ app.get("/background/tmdb:raw", async (req, res) => {
       return res.status(404).send("No backdrops found");
     }
 
-    const image = pickImage(backdrops);
+    // 🔥 prefer textless first
+    const textlessFirst = filterTextless(backdrops);
+
+    const image = pickImage(textlessFirst);
     if (!image) return res.status(404).send("No suitable backdrop");
 
     return res.redirect(`${IMAGE_BASE}${image.file_path}`);
