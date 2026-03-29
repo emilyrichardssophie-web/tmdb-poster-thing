@@ -74,24 +74,30 @@ function computeScore(image, stats) {
   const voteAvg = image.vote_average || 0;
   const width = image.width || 1;
 
-  // Normalize width to 0–10
   const normalizedWidth = (width / stats.maxWidth) * 10;
 
-  // Log scaling for votes
-  const voteScore = Math.min(10, Math.log10(voteCount + 1) * 5);
+  // 🔥 NEW: saturating vote function
+  let voteScore;
+
+  if (voteCount >= 8) {
+    // plateau after 8 votes
+    voteScore = 8 + Math.log10(voteCount - 7);
+  } else {
+    voteScore = Math.log10(voteCount + 1) * 5;
+  }
+
+  voteScore = Math.min(10, voteScore);
 
   let wVotes, wRating, wWidth;
 
-  // 🔥 NEW: hard shift after ~8 votes
   if (stats.avgVotes >= 8) {
-    // votes matter LESS now
-    wVotes = 0.2;
-    wRating = 0.5;
-    wWidth = 0.3;
+    wVotes = 0.1;   // 🔥 even lower
+    wRating = 0.55;
+    wWidth = 0.35;
   } else if (stats.avgVotes >= 3) {
-    wVotes = 0.3;
+    wVotes = 0.25;
     wRating = 0.45;
-    wWidth = 0.25;
+    wWidth = 0.3;
   } else {
     wVotes = 0.1;
     wRating = 0.55;
