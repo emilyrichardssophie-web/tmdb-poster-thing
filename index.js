@@ -9,7 +9,7 @@ const PORT = process.env.PORT || 3000;
 const TMDB_BASE = "https://api.themoviedb.org/3";
 const IMAGE_BASE = `https://image.tmdb.org/t/p/${config.imageSize}`;
 
-// Simple memory cache (optional but useful)
+// Simple memory cache
 const cache = new Map();
 const CACHE_TTL = 1000 * 60 * 60; // 1 hour
 
@@ -64,7 +64,7 @@ function pickPoster(posters) {
 
   if (!filtered.length) return null;
 
-  // rank by quality
+  // Rank by quality
   filtered.sort((a, b) => {
     const scoreA = a.vote_average * a.vote_count;
     const scoreB = b.vote_average * b.vote_count;
