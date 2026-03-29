@@ -58,55 +58,6 @@ async function getImages(type, id) {
   return res.data;
 }
 
-// --- GLOBAL STATS ---
-function computeStats(images) {
-  const maxWidth = Math.max(...images.map(i => i.width || 1), 1);
-  const avgVotes =
-    images.reduce((sum, i) => sum + (i.vote_count || 0), 0) /
-    Math.max(images.length, 1);
-
-  return { maxWidth, avgVotes };
-}
-
-// --- SCORE FUNCTION ---
-function computeScore(image, stats) {
-  const voteCount = image.vote_count || 0;
-  const voteAvg = image.vote_average || 0;
-  const width = image.width || 1;
-
-  // Normalize everything to ~0–10 scale
-  const normalizedWidth = (width / stats.maxWidth) * 10;
-
-  // Log scaling for votes (keeps within range)
-  const voteScore = Math.min(10, Math.log10(voteCount + 1) * 5);
-
-  // Adaptive weighting
-  let wVotes, wRating, wWidth;
-
-  if (stats.avgVotes >= 20) {
-    // Popular → trust votes more
-    wVotes = 0.5;
-    wRating = 0.3;
-    wWidth = 0.2;
-  } else if (stats.avgVotes >= 5) {
-    // Medium confidence
-    wVotes = 0.35;
-    wRating = 0.4;
-    wWidth = 0.25;
-  } else {
-    // Low data → trust quality more
-    wVotes = 0.15;
-    wRating = 0.55;
-    wWidth = 0.3;
-  }
-
-  return (
-    voteScore * wVotes +
-    voteAvg * wRating +
-    normalizedWidth * wWidth
-  );
-}
-
 // --- LANGUAGE FILTER ---
 function filterByLanguage(images) {
   let filtered = images.filter(
@@ -124,11 +75,64 @@ function filterByLanguage(images) {
   return filtered;
 }
 
+// --- SAFE VOTE FILTER ---
+function applyVoteFilter(images) {
+  const viable = images.filter(p => p.vote_count >= 2);
+  return viable.length ? viable : images;
+}
+
+// --- COMPUTE STATS ---
+function computeStats(images) {
+  const maxWidth = Math.max(...images.map(p => p.width || 1));
+  const avgVotes =
+    images.reduce((sum, p) => sum + p.vote_count, 0) / images.length;
+
+  return { maxWidth, avgVotes };
+}
+
+// --- SCORE SYSTEM ---
+function computeScore(p, stats) {
+  const vote_count = p.vote_count || 0;
+  const vote_average = p.vote_average || 0;
+  const width = p.width || 1;
+
+  // --- NORMALIZATION ---
+  const normalizedWidth = (width / stats.maxWidth) * 10;
+
+  // 🔥 KEY CHANGE: cap vote influence at 8
+  const cappedVotes = Math.min(vote_count, 8);
+  const voteScore = Math.log(cappedVotes + 1);
+
+  // --- DYNAMIC WEIGHTS ---
+  let wRating, wVotes, wWidth;
+
+  if (vote_count >= 8) {
+    // 🔥 once "trusted", prioritize quality heavily
+    wRating = 0.7;
+    wVotes = 0.1;
+    wWidth = 0.2;
+  } else if (stats.avgVotes >= 5) {
+    wRating = 0.6;
+    wVotes = 0.25;
+    wWidth = 0.15;
+  } else {
+    wRating = 0.5;
+    wVotes = 0.2;
+    wWidth = 0.3;
+  }
+
+  return (
+    vote_average * wRating +
+    voteScore * wVotes +
+    normalizedWidth * wWidth
+  );
+}
+
 // --- PICK IMAGE ---
 function pickImage(images, isBackdrop = false) {
   if (!images.length) return null;
 
-  // 🎬 BACKDROP: prefer textless and skip language filtering
+  // 🎬 BACKDROP: prefer textless
   if (isBackdrop) {
     const textless = images.filter(p => p.iso_639_1 === null);
     if (textless.length) {
@@ -138,53 +142,46 @@ function pickImage(images, isBackdrop = false) {
     images = filterByLanguage(images);
   }
 
+  images = applyVoteFilter(images);
+
+  if (!images.length) return null;
+
   const stats = computeStats(images);
 
-  // Score all images
-  const scored = images.map(img => ({
-    ...img,
-    _score: computeScore(img, stats)
+  // score all
+  const scored = images.map(p => ({
+    ...p,
+    _score: computeScore(p, stats)
   }));
 
-  // Sort by score
+  // sort
   scored.sort((a, b) => b._score - a._score);
-
-  if (!scored.length) return null;
 
   const original = scored[0];
 
-  // ORIGINAL MODE
+  // ORIGINAL
   if (config.variant !== "alternative") {
     return original;
   }
 
-  // --- ALTERNATIVE MODE ---
+  // ALTERNATIVE
+  const alternatives = scored.slice(1).filter(p =>
+    p.file_path !== original.file_path &&
+    p.vote_count >= Math.max(2, original.vote_count * 0.3)
+  );
 
-  const alternatives = scored.slice(1);
-
-  if (!alternatives.length) return original;
-
-  // Filter out weak alternatives
-  const strongAlternatives = alternatives.filter(alt => {
-    const scoreRatio = alt._score / original._score;
-    const hasVotes = alt.vote_count >= 2;
-
-    return scoreRatio >= 0.75 && hasVotes;
-  });
-
-  // Prefer strong alternatives
-  if (strongAlternatives.length) {
-    return strongAlternatives[0];
+  if (!alternatives.length) {
+    return scored[1] || original;
   }
 
-  // Fallback: if second best is close enough, use it
-  const second = alternatives[0];
-  if (second && second._score >= original._score * 0.85) {
-    return second;
+  const alt = alternatives[0];
+
+  // safety fallback
+  if (alt._score < original._score * 0.75) {
+    return original;
   }
 
-  // Final fallback
-  return original;
+  return alt;
 }
 
 // --- ROUTES ---
