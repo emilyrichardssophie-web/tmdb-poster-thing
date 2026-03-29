@@ -25,7 +25,7 @@ function normalizeType(type) {
   return null;
 }
 
-// --- FETCH ---
+// --- FETCH POSTERS ---
 async function getPosters(type, id) {
   const normalizedType = normalizeType(type);
 
@@ -64,15 +64,15 @@ async function getPosters(type, id) {
   return posters;
 }
 
-// --- BETTER SORTING ---
+// --- SORTING LOGIC ---
 function sortPosters(posters) {
   return posters.sort((a, b) => {
-    // 1. Higher vote_count first (most important)
+    // 1. More votes = more "official"
     if (b.vote_count !== a.vote_count) {
       return b.vote_count - a.vote_count;
     }
 
-    // 2. Higher vote_average
+    // 2. Higher rating
     if (b.vote_average !== a.vote_average) {
       return b.vote_average - a.vote_average;
     }
@@ -82,29 +82,43 @@ function sortPosters(posters) {
   });
 }
 
-// --- PICK LOGIC ---
+// --- PICK POSTER ---
 function pickPoster(posters) {
-  // Step 1: filter by language
+  if (!posters.length) return null;
+
+  // 1. Exact language
   let filtered = posters.filter(
     p => p.iso_639_1 === config.defaultLanguage
   );
 
-  // fallback
+  // 2. Fallback to "no language"
+  if (!filtered.length) {
+    filtered = posters.filter(p => p.iso_639_1 === null);
+  }
+
+  // 3. Fallback to ANY language
   if (!filtered.length && config.fallbackToAnyLanguage) {
     filtered = posters;
   }
 
   if (!filtered.length) return null;
 
-  // Step 2: sort properly
   const sorted = sortPosters(filtered);
 
-  // Step 3: pick variant
-  if (config.variant === "alternative") {
-    return sorted[1] || sorted[0];
+  // ORIGINAL
+  if (config.variant !== "alternative") {
+    return sorted[0];
   }
 
-  return sorted[0];
+  // ALTERNATIVE (avoid near-duplicates)
+  const original = sorted[0];
+
+  const alternative = sorted.find(p =>
+    p.file_path !== original.file_path &&
+    Math.abs(p.width - original.width) > 50
+  );
+
+  return alternative || sorted[1] || sorted[0];
 }
 
 // --- ROUTE ---
