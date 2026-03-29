@@ -1,0 +1,12 @@
+services:
+  tmdb-thing:
+    image: ghcr.io/emilyrichardssophie-web/tmdb-poster-thing:latest
+    container_name: tmdb-thing
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    profiles:
+      - tmdb-thing
+      - all
