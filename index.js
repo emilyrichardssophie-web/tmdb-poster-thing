@@ -7,7 +7,6 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 const TMDB_BASE = "https://api.themoviedb.org/3";
-const IMAGE_BASE = `https://image.tmdb.org/t/p/${config.imageSize}`;
 
 // Cache
 const cache = new Map();
@@ -23,6 +22,16 @@ function normalizeType(type) {
   if (["tv", "series", "show", "tvshow"].includes(t)) return "tv";
 
   return null;
+}
+
+// --- GET IMAGE BASE ---
+function getImageBase(type, variant) {
+  const size =
+    config.imageSize[type]?.[variant] ||
+    config.imageSize[type]?.original ||
+    "original";
+
+  return `https://image.tmdb.org/t/p/${size}`;
 }
 
 // --- FETCH IMAGES ---
@@ -68,7 +77,7 @@ function computeStats(images) {
   return { maxWidth, avgVotes };
 }
 
-// --- SCORE FUNCTION ---
+// --- SCORE FUNCTION (UPDATED LOGIC) ---
 function computeScore(image, stats) {
   const voteCount = image.vote_count || 0;
   const voteAvg = image.vote_average || 0;
@@ -76,32 +85,24 @@ function computeScore(image, stats) {
 
   const normalizedWidth = (width / stats.maxWidth) * 10;
 
-  // 🔥 NEW: saturating vote function
-  let voteScore;
-
-  if (voteCount >= 8) {
-    // plateau after 8 votes
-    voteScore = 8 + Math.log10(voteCount - 7);
-  } else {
-    voteScore = Math.log10(voteCount + 1) * 5;
-  }
-
-  voteScore = Math.min(10, voteScore);
+  const voteScore = Math.min(10, Math.log10(voteCount + 1) * 5);
 
   let wVotes, wRating, wWidth;
 
-  if (stats.avgVotes >= 8) {
-    wVotes = 0.1;   // 🔥 even lower
-    wRating = 0.55;
-    wWidth = 0.35;
-  } else if (stats.avgVotes >= 3) {
-    wVotes = 0.25;
+  // 🔥 NEW: HARD SHIFT AFTER ~5 VOTES
+  if (voteCount >= 5) {
+    // Votes are "trusted enough" → focus on quality
+    wVotes = 0.15;
+    wRating = 0.65;
+    wWidth = 0.2;
+  } else if (stats.avgVotes >= 5) {
+    wVotes = 0.35;
     wRating = 0.45;
-    wWidth = 0.3;
+    wWidth = 0.2;
   } else {
-    wVotes = 0.1;
-    wRating = 0.55;
-    wWidth = 0.35;
+    wVotes = 0.2;
+    wRating = 0.6;
+    wWidth = 0.2;
   }
 
   return (
@@ -109,40 +110,6 @@ function computeScore(image, stats) {
     voteAvg * wRating +
     normalizedWidth * wWidth
   );
-}
-
-// --- LOW DATA OVERRIDE ---
-function tryLowDataOverride(images) {
-  if (!images.length) return null;
-
-  const lowVoteCount = images.filter(i => (i.vote_count || 0) <= 3).length;
-  const ratio = lowVoteCount / images.length;
-
-  if (ratio < 0.7) return null;
-
-  const bestRated = [...images].sort(
-    (a, b) => (b.vote_average || 0) - (a.vote_average || 0)
-  )[0];
-
-  const bestWidth = [...images].sort(
-    (a, b) => (b.width || 0) - (a.width || 0)
-  )[0];
-
-  const avgRating =
-    images.reduce((sum, i) => sum + (i.vote_average || 0), 0) /
-    Math.max(images.length, 1);
-
-  const avgWidth =
-    images.reduce((sum, i) => sum + (i.width || 0), 0) /
-    Math.max(images.length, 1);
-
-  const ratingDominant = (bestRated.vote_average || 0) >= avgRating * 1.8;
-  const widthDominant = (bestWidth.width || 0) >= avgWidth * 1.5;
-
-  if (ratingDominant) return bestRated;
-  if (widthDominant) return bestWidth;
-
-  return null;
 }
 
 // --- LANGUAGE FILTER ---
@@ -166,21 +133,17 @@ function filterByLanguage(images) {
 function pickImage(images, isBackdrop = false) {
   if (!images.length) return null;
 
-  // BACKDROPS → prefer textless
   if (isBackdrop) {
     const textless = images.filter(p => p.iso_639_1 === null);
-    if (textless.length) images = textless;
+    if (textless.length) {
+      images = textless;
+    }
   } else {
     images = filterByLanguage(images);
   }
 
   const stats = computeStats(images);
 
-  // 🧠 LOW DATA OVERRIDE
-  const override = tryLowDataOverride(images);
-  if (override) return override;
-
-  // Score images
   const scored = images.map(img => ({
     ...img,
     _score: computeScore(img, stats)
@@ -237,10 +200,13 @@ app.get("/poster/tmdb:raw", async (req, res) => {
       return res.status(404).send("No posters found");
     }
 
-    const image = pickImage(posters);
+    const image = pickImage(posters, false);
     if (!image) return res.status(404).send("No suitable poster");
 
-    return res.redirect(`${IMAGE_BASE}${image.file_path}`);
+    const base = getImageBase("poster", config.variant);
+
+    return res.redirect(`${base}${image.file_path}`);
+
   } catch (err) {
     console.error(err);
     return res.status(500).send("Server error");
@@ -266,7 +232,10 @@ app.get("/background/tmdb:raw", async (req, res) => {
     const image = pickImage(backdrops, true);
     if (!image) return res.status(404).send("No suitable backdrop");
 
-    return res.redirect(`${IMAGE_BASE}${image.file_path}`);
+    const base = getImageBase("backdrop", config.variant);
+
+    return res.redirect(`${base}${image.file_path}`);
+
   } catch (err) {
     console.error(err);
     return res.status(500).send("Server error");
