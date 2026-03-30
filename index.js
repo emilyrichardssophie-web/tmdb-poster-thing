@@ -77,32 +77,35 @@ function computeStats(images) {
   return { maxWidth, avgVotes };
 }
 
-// --- SCORE FUNCTION (UPDATED LOGIC) ---
+// --- SCORE FUNCTION ---
 function computeScore(image, stats) {
   const voteCount = image.vote_count || 0;
   const voteAvg = image.vote_average || 0;
   const width = image.width || 1;
 
+  // ❌ Reject very low resolution
+  if (width < 700) return -Infinity;
+
   const normalizedWidth = (width / stats.maxWidth) * 10;
 
-  const voteScore = Math.min(10, Math.log10(voteCount + 1) * 5);
+  // ✅ HARD CAP votes (no scaling past 5)
+  const voteScore = Math.min(voteCount, 5);
 
   let wVotes, wRating, wWidth;
 
-  // 🔥 NEW: HARD SHIFT AFTER ~5 VOTES
+  // ✅ After 5 votes → rating dominates
   if (voteCount >= 5) {
-    // Votes are "trusted enough" → focus on quality
-    wVotes = 0.15;
-    wRating = 0.65;
-    wWidth = 0.2;
+    wVotes = 0.1;
+    wRating = 0.75;
+    wWidth = 0.15;
   } else if (stats.avgVotes >= 5) {
-    wVotes = 0.35;
-    wRating = 0.45;
+    wVotes = 0.25;
+    wRating = 0.55;
     wWidth = 0.2;
   } else {
-    wVotes = 0.2;
-    wRating = 0.6;
-    wWidth = 0.2;
+    wVotes = 0.15;
+    wRating = 0.7;
+    wWidth = 0.15;
   }
 
   return (
@@ -133,6 +136,7 @@ function filterByLanguage(images) {
 function pickImage(images, isBackdrop = false) {
   if (!images.length) return null;
 
+  // 🎬 Backdrops → prefer textless
   if (isBackdrop) {
     const textless = images.filter(p => p.iso_639_1 === null);
     if (textless.length) {
@@ -155,7 +159,11 @@ function pickImage(images, isBackdrop = false) {
 
   const original = scored[0];
 
-  if (config.variant !== "alternative") {
+  const variant = isBackdrop
+    ? config.variant.backdrop
+    : config.variant.poster;
+
+  if (variant !== "alternative") {
     return original;
   }
 
@@ -184,6 +192,7 @@ function pickImage(images, isBackdrop = false) {
 
 // --- ROUTES ---
 
+// POSTER
 app.get("/poster/tmdb:raw", async (req, res) => {
   try {
     const raw = req.params.raw.replace(/^:/, "");
@@ -203,7 +212,8 @@ app.get("/poster/tmdb:raw", async (req, res) => {
     const image = pickImage(posters, false);
     if (!image) return res.status(404).send("No suitable poster");
 
-    const base = getImageBase("poster", config.variant);
+    const variant = config.variant.poster;
+    const base = getImageBase("poster", variant);
 
     return res.redirect(`${base}${image.file_path}`);
 
@@ -213,6 +223,7 @@ app.get("/poster/tmdb:raw", async (req, res) => {
   }
 });
 
+// BACKDROP
 app.get("/background/tmdb:raw", async (req, res) => {
   try {
     const raw = req.params.raw.replace(/^:/, "");
@@ -232,7 +243,8 @@ app.get("/background/tmdb:raw", async (req, res) => {
     const image = pickImage(backdrops, true);
     if (!image) return res.status(404).send("No suitable backdrop");
 
-    const base = getImageBase("backdrop", config.variant);
+    const variant = config.variant.backdrop;
+    const base = getImageBase("backdrop", variant);
 
     return res.redirect(`${base}${image.file_path}`);
 
