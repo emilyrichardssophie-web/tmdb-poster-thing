@@ -9,8 +9,13 @@ const config = {
 
   defaultLanguage: get("DEFAULT_LANGUAGE", "en"),
 
-  variant: get("VARIANT", "original"), // default fallback
+  // ✅ Variant per type
+  variant: {
+    poster: get("POSTER_VARIANT", "original"),
+    backdrop: get("BACKDROP_VARIANT", "original")
+  },
 
+  // ✅ Size per type + variant
   imageSize: {
     poster: {
       original: get("POSTER_SIZE_ORIGINAL", "w500"),
